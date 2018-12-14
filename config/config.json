@@ -1,0 +1,5 @@
+{
+    "version": 1,
+    "env": "local",
+    "port": 1444
+}
