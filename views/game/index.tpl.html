@@ -10,14 +10,22 @@
     const ROTATION_SPEED = PI / 60;
     const SNOWBALL_SPEED = 20;
     const THROW_TIMEOUT = 50;
-    const CAPTION_WIDTH = 30;
+    const CAPTION_WIDTH = 60;
     const CAPTION_HEIGHT = 10;
-    const CAPTION_FONT = '15px Consolas';
+    const CAPTION_FONT = '12px Consolas';
+    const LAYER_CAPTION_FONT = '30px Consolas'
+    const RESPAWN_DELAY = 5000;
+    const RELOAD_SPRITE_TICKS = 10;
+    const STRIKE_PATH_LENGTH = 20;
+    const OBSTACLES = [
+        [100, 0, 110, 100]
+    ];
 
     var myGamePiece;
     var myScore;
     var players = [];
     var snowballs = [];
+    var obstacles = [];
 
     var socket = io("http://ws064.kfim.int:1445");
     socket.on('initPlayer', function (data) {
@@ -64,6 +72,9 @@
         }
         if (player) {
             player.killed = true;
+            if (num === myGamePiece.num) {
+                player.respawnTime = Date.now() + RESPAWN_DELAY;
+            }
         }
     });
 
@@ -104,15 +115,19 @@
             }
             snowballs.push(new snowball(item.player, item.num, item.x, item.y, item.direction));
         }
+        for (let item of OBSTACLES) {
+            obstacles.push(new obstacle(item));
+        }
         myGamePiece.accelerateX = 0;
         myGamePiece.accelerateY = 0;
         //myScore = new component("30px", "Consolas", "black", 280, 40, "text");
-        myGameArea.start();
+        myGameArea.start(myGamePiece.color);
     }
     
     var myGameArea = {
         canvas : document.createElement("canvas"),
-        start : function() {
+        start : function(color) {
+            //this.playerColor = color;
             this.canvas.width = AREA_WIDTH;
             this.canvas.height = AREA_HEIGHT;
             this.context = this.canvas.getContext("2d");
@@ -125,13 +140,35 @@
             document.addEventListener('keyup', function(event) {
                 keyUpHandler(event.keyCode)
             }, false);
+
+            this.respawnLayer = new respawnLayer(color, 0.5);
         },
         clear : function() {
             this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
         }
     }
 
-    function textComponent(text, color, x, y) {
+    function respawnLayer(color, opacity) {
+        this.x = 0;
+        this.y = 0;
+        this.width = AREA_WIDTH;
+        this.height = AREA_HEIGHT;
+        this.caption = new textComponent('Respawn ', LAYER_CAPTION_FONT, color, AREA_WIDTH / 2 - 100, AREA_HEIGHT / 2 - 15);
+        
+        this.show = function(seconds) {
+            ctx = myGameArea.context;
+            //ctx.beginPath();
+            ctx.globalAlpha = opacity;
+            ctx.fillStyle = color || 'black';
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.globalAlpha = 1;
+
+            this.caption.text = 'Respawn ' + seconds;
+            this.caption.update();
+        }
+    }
+
+    function textComponent(text, font, color, x, y) {
         this.x = x;
         this.y = y;
         this.color = color;
@@ -142,21 +179,45 @@
         this.update = function() {
             ctx = myGameArea.context;
             //ctx.beginPath();
-            ctx.font = CAPTION_FONT;
+            ctx.font = font;
             ctx.fillStyle = color;
             ctx.fillText(this.text, this.x, this.y);
         }
         this.newPos = function(x, y) {
-            y = y + PLAYER_RADIUS / 2;
-            if (x > CAPTION_WIDTH / 2) {
-                this.x = x - CAPTION_WIDTH / 2;
-            } else {
+            this.y = y - PLAYER_RADIUS - 20;
+            if (x <= CAPTION_WIDTH / 2) {
                 this.x = PLAYER_RADIUS * 2 + x;
+            } else if (x >= AREA_WIDTH - CAPTION_WIDTH / 2) {
+                this.x = x - PLAYER_RADIUS * 2 - CAPTION_WIDTH;
+            } else {
+                this.x = x - CAPTION_WIDTH / 2;
             }
-            if (y < 0) {
-                this.y = PLAYER_RADIUS * 2;
+            if (this.y < CAPTION_HEIGHT) {
+                this.y = y + PLAYER_RADIUS * 2 + 10;
             }
         }
+    }
+
+    function obstacle(coords) {
+        this.coords = coords;
+
+        this.update = function() {
+            ctx = myGameArea.context;
+            ctx.beginPath();
+            ctx.fillStyle = "white";
+            ctx.fillRect(coords[0], coords[1], coords[2] - coords[0], coords[3] - coords[1]);
+        }
+    }
+
+    let playerSprite = {
+        stayDown: [0, 0],
+        stayLeft: [30, 0],
+        stayUp: [60, 0],
+        stayRight: [90, 0],
+        moveDown: [0, 30, 0, 60],
+        moveLeft: [30, 30, 30, 60],
+        moveUp: [60, 30 ,60, 60],
+        moveRight: [90, 30, 90, 60]
     }
 
     function player(num, name, color, x, y, direction, speedX, speedY) {
@@ -172,21 +233,36 @@
         this.directionGoal = false;
         this.direction = direction || 0;
         this.throwTimeout = 0;
-        this.caption = new textComponent(this.name, color, this.x, this.y);
+        this.caption = new textComponent(this.name, CAPTION_FONT, color, this.x, this.y);
+        this.spriteImg = new Image();
+        this.spriteImg.src = "/images/player.png";
+        this.spritePos = 'stayDown';
+        this.spriteVariant = 0;
+        this.spriteTicks = 0;
 
         this.update = function() {
             if (this.killed) {
                 return;
             }
             ctx = myGameArea.context;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, PLAYER_RADIUS, 0, 2 * Math.PI, false);
+            ctx.beginPath();//17x21 13 9
+            ctx.drawImage(this.spriteImg, playerSprite[this.spritePos][this.spriteVariant * 2], playerSprite[this.spritePos][this.spriteVariant * 2 + 1], 17, 21, this.x - PLAYER_RADIUS, this.y - PLAYER_RADIUS, PLAYER_RADIUS * 2, PLAYER_RADIUS * 2);
+            /*ctx.arc(this.x, this.y, PLAYER_RADIUS, 0, 2 * Math.PI, false);
             ctx.fillStyle = color;
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(this.x + Math.sin(this.direction)*(PLAYER_RADIUS + SNOWBALL_RADIUS), this.y - Math.cos(this.direction)*(PLAYER_RADIUS + SNOWBALL_RADIUS), SNOWBALL_RADIUS, 0, 2 * Math.PI, false);
-            ctx.fillStyle = 'white';
-            ctx.fill();
+            ctx.fill();*/
+
+            if (this.num === myGamePiece.num) {
+                let snowBallX = this.x + Math.sin(this.direction)*(PLAYER_RADIUS + SNOWBALL_RADIUS);
+                let snowBallY = this.y - Math.cos(this.direction)*(PLAYER_RADIUS + SNOWBALL_RADIUS);
+                ctx.beginPath();
+                ctx.moveTo(snowBallX, snowBallY);
+                ctx.lineTo(snowBallX + Math.sin(this.direction) * STRIKE_PATH_LENGTH, snowBallY - Math.cos(this.direction) * STRIKE_PATH_LENGTH);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(snowBallX, snowBallY, SNOWBALL_RADIUS, 0, 2 * Math.PI, false);
+                ctx.fillStyle = 'white';
+                ctx.fill();
+            }
             
             this.caption.update();
         }
@@ -217,6 +293,8 @@
                 this.speedY = MAX_SPEED * (this.speedY < 0 ? -1 : 1);
             }
 
+            checkCollisions();
+
             this.x += this.speedX;
             this.y += this.speedY;
 
@@ -234,6 +312,26 @@
             } else if (this.y > AREA_HEIGHT - PLAYER_RADIUS) {
                 this.y = AREA_HEIGHT - PLAYER_RADIUS;
                 this.speedY = 0;
+            }
+
+            if (++this.spriteTicks >= RELOAD_SPRITE_TICKS) {
+                this.spriteTicks = 0;
+                if (this.speedX == 0 && this.speedY == 0) {
+                    if (/stay/.test(this.spritePos)) {
+                        //nothing
+                    } else {
+                        this.spritePos = 'stay' + this.spritePos.substr(4);
+                        this.spriteVariant = 0;
+                    }
+                } else if (Math.abs(this.speedX) >= Math.abs(this.speedY)) {
+                    this.spritePos = 'move' + (this.speedX > 0 ? 'Right' : 'Left');
+                } else {
+                    this.spritePos = 'move' + (this.speedY > 0 ? 'Down' : 'Up');
+                }
+
+                if (/move/.test(this.spritePos)) {
+                    this.spriteVariant = (this.spriteVariant + 1) % 2;
+                }
             }
 
             if (this.directionGoal !== false) {
@@ -358,13 +456,17 @@
         }
     }
 
+    function sqrDistanceBetween(o1, o2) {
+        let dx = o1.x - o2.x;
+        let dy = o1.y - o2.y;
+        return dx*dx+dy*dy;
+    }
+
     function checkCollisions() {
         for (let s of snowballs) {
             for (let p of players) {
-                let dx = s.x - p.x;
-                let dy = s.y - p.y;
                 let dr = PLAYER_RADIUS + SNOWBALL_RADIUS;
-                if (dx*dx + dy*dy < dr*dr) {
+                if (sqrDistanceBetween(s, p) < dr*dr) {
                     socket.emit('voteKill', {
                         player: p.num,
                         snowball: s.num,
@@ -373,17 +475,127 @@
                 }
             }
         }
+
+        let my = myGamePiece;
+        if (!my.killed) {
+            for (let p of players) {
+                if (p.killed) {
+                    continue;
+                }
+                let dr = PLAYER_RADIUS + PLAYER_RADIUS;
+                if (
+                    sqrDistanceBetween(my, p) <= dr*dr
+                    && (my.speedX != 0 || my.speedY != 0 || p.speedX != 0 || p.speedY != 0)
+                    && (
+                        sqrDistanceBetween({
+                            x: my.x + my.speedX,
+                            y: my.y + my.speedY
+                        }, {
+                            x: p.x + p.speedX,
+                            y: p.y + p.speedY
+                        }
+                    )) < sqrDistanceBetween(my, p)
+                ) {
+                    let oldSpeedX = my.speedX;
+                    let oldSpeedY = my.speedY;
+                    my.speedX = p.speedX;
+                    my.speedY = p.speedY;
+                    my.accelerateX = p.accelerateX;
+                    my.accelerateY = p.accelerateY;
+                    if (my.speedX === 0) {
+                        //my.speedX = BRAKING_ACCELERATE * 2 * (oldSpeedX > 0 ? -1 : (oldSpeedX < 0 ? 1 : 0));
+                        //my.accelerateX = 0;
+                    }
+                    if (my.speedY === 0) {
+                        //my.speedY = BRAKING_ACCELERATE * 2 * (oldSpeedY > 0 ? -1 : (oldSpeedY < 0 ? 1 : 0));
+                        //my.accelerateY = 0;
+                    }
+                }
+            }
+
+            for (let p of obstacles) {
+                let myLeft = my.x - PLAYER_RADIUS;
+                let myRight = my.x + PLAYER_RADIUS;
+                let myTop = my.y - PLAYER_RADIUS;
+                let myBottom = my.y + PLAYER_RADIUS;
+                let otherLeft = p.coords[0];
+                let otherTop = p.coords[1];
+                let otherRight = p.coords[2];
+                let otherBottom = p.coords[3];
+                if (
+                    !(
+                        myBottom < otherTop ||
+                        myTop > otherBottom ||
+                        myRight < otherLeft ||
+                        myLeft > otherRight
+                    )
+                ) {
+                    let dMyBottom = Math.abs(myBottom - otherTop);
+                    let dMyTop = Math.abs(myTop - otherBottom);
+                    let dMyLeft = Math.abs(myLeft - otherRight);
+                    let dMyRight = Math.abs(myRight - otherLeft);
+
+                    let min = Math.min(dMyBottom, dMyTop, dMyLeft, dMyRight);
+
+                    if (dMyBottom == min) {
+                        if (myBottom >= otherTop) {
+                            if (my.speedY > 0) {
+                                my.speedY = 0;
+                                //my.y = otherTop - PLAYER_RADIUS;
+                            }
+                        }
+                    }
+                    if (dMyTop == min) {
+                        if (myTop <= otherBottom) {
+                            if (my.speedY < 0) {
+                                my.speedY = 0;
+                                //my.y = otherBottom + PLAYER_RADIUS;
+                            }
+                        }
+                    }
+                    if (dMyRight == min) {
+                        if (myRight >= otherLeft) {
+                            if (my.speedX > 0) {
+                                my.speedX = 0;
+                                //my.x = otherLeft - PLAYER_RADIUS;
+                            }
+                        }
+                    }
+                    if (dMyLeft == min) {
+                        if (myLeft <= otherRight) {
+                            if (my.speedX < 0) {
+                                my.speedX = 0;
+                                //my.x = otherRight + PLAYER_RADIUS;
+                            }
+                        }
+                    }
+                    //my.speedX = 0;
+                    //my.speedY = 0;
+                }
+            }
+        }
+    }
+
+    function showTimeToRespawn(seconds) {
+        myGameArea.respawnLayer.show(seconds);
     }
     
     function tryRespawn() {
         if (!myGamePiece.killed) {
             return;
         }
+        if (myGamePiece.respawnTime > Date.now()) {
+            showTimeToRespawn(Math.ceil((myGamePiece.respawnTime - Date.now()) / 1000));
+            return ;
+        }
         socket.emit('pleaseRespawn');
     }
 
     function updateGameArea() {
         myGameArea.clear();
+        for (let item of obstacles) {
+            item.update();
+        }
         myGamePiece.newPos();
         myGamePiece.update();
         socket.emit('iamhere', {
